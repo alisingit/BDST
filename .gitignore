@@ -1,0 +1,49 @@
+### Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+### Virtual environments
+venv/
+.venv/
+env/
+.env/
+env.bak/
+venv.bak/
+
+### IDE / Editor
+.idea/
+.vscode/
+*.iml
+
+### OS files
+.DS_Store
+Thumbs.db
+
+### Logs
+logs/
+*.log
+
+### Airflow
+airflow.cfg
+airflow.db
+airflow.db-journal
+airflow_logs/
+unittests.cfg
+
+### Docker / Compose
+*.pid
+*.pid.lock
+
+### Other environment / secrets
+.python-version
+.env.local
+.env.*.local
+
+
