@@ -3,7 +3,7 @@ import logging
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
+from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 
@@ -120,11 +120,14 @@ with DAG(
     max_active_runs=1,
     tags=["hh", "dds", "salary_industries", "postgres"],
 ) as dds_salary_dag:
-    # Учебный режим: вместо реального ожидания ODS-DAG
-    # используем пустой оператор, чтобы можно было запускать DDS
-    # независимо от текущего состояния ODS-цепочки.
-    wait_ods_salary = EmptyOperator(
+    # В прод-режиме DDS ждёт завершения ODS-DAG по справочнику отраслей/сфер.
+    wait_ods_salary = ExternalTaskSensor(
         task_id="wait_for_ods_salary_industries_postgres",
+        external_dag_id="hh_salary_industries_to_postgres",
+        external_task_id="load_salary_industries_to_postgres",
+        mode="reschedule",
+        poke_interval=60,
+        timeout=60 * 60,
     )
 
     prepare_schema_salary = PythonOperator(

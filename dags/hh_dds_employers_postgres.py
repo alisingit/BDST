@@ -3,7 +3,7 @@ import logging
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
+from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 
@@ -187,11 +187,13 @@ with DAG(
     max_active_runs=1,
     tags=["hh", "dds", "employers", "postgres"],
 ) as dds_employers_dag:
-    # Учебный режим: убираем реальный ExternalTaskSensor и
-    # заменяем его пустым оператором, чтобы DDS можно было запускать
-    # независимо от текущего состояния ODS-DAG.
-    wait_ods_employers = EmptyOperator(
+    wait_ods_employers = ExternalTaskSensor(
         task_id="wait_for_ods_employers_postgres",
+        external_dag_id="hh_employers_to_postgres",
+        external_task_id="load_employers_to_postgres",
+        mode="reschedule",
+        poke_interval=60,
+        timeout=60 * 60,
     )
 
     prepare_schema_employers = PythonOperator(
