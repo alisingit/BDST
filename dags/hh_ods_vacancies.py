@@ -1,20 +1,22 @@
-from datetime import datetime, timedelta
 import json
 import logging
+import time
+from datetime import datetime, timedelta
 
 import requests
 
-from airflow.hooks.base import BaseHook
 from pymongo import MongoClient
+
 from airflow import DAG
+from airflow.hooks.base import BaseHook
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.mysql.hooks.mysql import MySqlHook
-from airflow.providers.mongo.hooks.mongo import MongoHook
 from airflow.models import Variable
 
 
 HH_API_URL = "https://api.hh.ru/vacancies"
+
 
 
 def _get_hh_headers() -> dict:
@@ -62,12 +64,90 @@ def extract_vacancies(search_text: str = "data engineer", pages: int = 1, **cont
     return all_items
 
 
+def enrich_vacancies_details(
+    max_items: int = 200,
+    sleep_seconds: float = 0.2,
+    max_retries: int = 5,
+    **context,
+):
+    """
+    Для каждой вакансии из поиска запрашивает детальную карточку `GET /vacancies/{id}`.
+
+    Это нужно, чтобы получить `specializations` (привязку к сферам/индустриям),
+    которой обычно нет в поисковой выдаче.
+    """
+    ti = context["ti"]
+    raw_vacancies = ti.xcom_pull(task_ids="extract_vacancies") or []
+    if not raw_vacancies:
+        logging.info("No vacancies to enrich")
+        return []
+
+    headers = _get_hh_headers()
+    enriched = []
+
+    for idx, v in enumerate(raw_vacancies[:max_items], start=1):
+        vacancy_id = v.get("id")
+        if vacancy_id is None:
+            continue
+
+        url = f"{HH_API_URL}/{vacancy_id}"
+        last_exc: Exception | None = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                resp = requests.get(url, headers=headers, timeout=30)
+                if resp.status_code == 429:
+                    backoff = min(10.0, sleep_seconds * attempt * 2)
+                    logging.warning(
+                        "Rate limited (429) on vacancy_id=%s attempt=%s, sleeping %.2fs",
+                        vacancy_id,
+                        attempt,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    continue
+                resp.raise_for_status()
+                enriched.append(resp.json())
+                break
+            except Exception as exc:  # noqa: BLE001 - airflow task should not crash on single vacancy
+                last_exc = exc
+                backoff = min(10.0, sleep_seconds * attempt * 2)
+                logging.warning(
+                    "Failed to fetch vacancy details vacancy_id=%s attempt=%s/%s: %s. Sleeping %.2fs",
+                    vacancy_id,
+                    attempt,
+                    max_retries,
+                    exc,
+                    backoff,
+                )
+                time.sleep(backoff)
+        else:
+            logging.error(
+                "Skip vacancy_id=%s after %s retries. Last error: %s",
+                vacancy_id,
+                max_retries,
+                last_exc,
+            )
+
+        if idx % 25 == 0:
+            logging.info("Enriched %d/%d vacancies", idx, min(max_items, len(raw_vacancies)))
+
+        time.sleep(sleep_seconds)
+
+    logging.info("Enriched %d vacancies with details", len(enriched))
+    return enriched
+
+
 def transform_vacancies(**context):
     """
     Минимальная нормализация: выделяем несколько полей + сохраняем сырой JSON.
     """
     ti = context["ti"]
-    raw_vacancies = ti.xcom_pull(task_ids="extract_vacancies") or []
+    raw_vacancies = (
+        ti.xcom_pull(task_ids="enrich_vacancies_details")
+        or ti.xcom_pull(task_ids="extract_vacancies")
+        or []
+    )
 
     transformed = []
     for v in raw_vacancies:
@@ -287,7 +367,7 @@ with DAG(
     default_args=default_args,
     description="Загрузка вакансий hh.ru в ODS (PostgreSQL)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 */6 * * *",
+    schedule_interval="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "postgres"],
@@ -296,6 +376,12 @@ with DAG(
         task_id="extract_vacancies",
         python_callable=extract_vacancies,
         op_kwargs={"search_text": "data engineer", "pages": 2},
+    )
+
+    enrich_pg = PythonOperator(
+        task_id="enrich_vacancies_details",
+        python_callable=enrich_vacancies_details,
+        op_kwargs={"max_items": 200, "sleep_seconds": 0.2, "max_retries": 5},
     )
 
     transform_pg = PythonOperator(
@@ -308,7 +394,7 @@ with DAG(
         python_callable=load_to_postgres,
     )
 
-    extract_pg >> transform_pg >> load_pg
+    extract_pg >> enrich_pg >> transform_pg >> load_pg
 
 
 with DAG(
@@ -316,7 +402,7 @@ with DAG(
     default_args=default_args,
     description="Загрузка вакансий hh.ru в ODS (MySQL)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="15 */6 * * *",
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "mysql"],
@@ -325,6 +411,12 @@ with DAG(
         task_id="extract_vacancies",
         python_callable=extract_vacancies,
         op_kwargs={"search_text": "data engineer", "pages": 2},
+    )
+
+    enrich_mysql = PythonOperator(
+        task_id="enrich_vacancies_details",
+        python_callable=enrich_vacancies_details,
+        op_kwargs={"max_items": 200, "sleep_seconds": 0.2, "max_retries": 5},
     )
 
     transform_mysql = PythonOperator(
@@ -337,7 +429,7 @@ with DAG(
         python_callable=load_to_mysql,
     )
 
-    extract_mysql >> transform_mysql >> load_mysql
+    extract_mysql >> enrich_mysql >> transform_mysql >> load_mysql
 
 
 with DAG(
@@ -345,7 +437,7 @@ with DAG(
     default_args=default_args,
     description="Загрузка вакансий hh.ru в ODS (MongoDB)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="30 */6 * * *",
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "mongo"],
@@ -354,6 +446,12 @@ with DAG(
         task_id="extract_vacancies",
         python_callable=extract_vacancies,
         op_kwargs={"search_text": "data engineer", "pages": 2},
+    )
+
+    enrich_mongo = PythonOperator(
+        task_id="enrich_vacancies_details",
+        python_callable=enrich_vacancies_details,
+        op_kwargs={"max_items": 200, "sleep_seconds": 0.2, "max_retries": 5},
     )
 
     transform_mongo = PythonOperator(
@@ -366,6 +464,6 @@ with DAG(
         python_callable=load_to_mongo,
     )
 
-    extract_mongo >> transform_mongo >> load_mongo
+    extract_mongo >> enrich_mongo >> transform_mongo >> load_mongo
 
 

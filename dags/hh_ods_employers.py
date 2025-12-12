@@ -8,6 +8,7 @@ from airflow.hooks.base import BaseHook
 from pymongo import MongoClient
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.mysql.hooks.mysql import MySqlHook
 from airflow.providers.mongo.hooks.mongo import MongoHook
@@ -15,6 +16,10 @@ from airflow.models import Variable
 
 
 HH_EMPLOYERS_API_URL = "https://api.hh.ru/employers"
+
+
+def same_execution_date(execution_date):
+    return execution_date
 
 
 def _get_hh_headers() -> dict:
@@ -244,11 +249,21 @@ with DAG(
     default_args=default_args,
     description="Загрузка работодателей hh.ru в ODS (PostgreSQL)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 */6 * * *",
+    schedule_interval="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "employers", "postgres"],
 ) as dag_employers_postgres:
+    wait_vacancies = ExternalTaskSensor(
+        task_id="wait_for_vacancies_postgres",
+        external_dag_id="hh_vacancies_to_postgres",
+        external_task_id="load_to_postgres",
+        execution_date_fn=same_execution_date,
+        mode="reschedule",
+        poke_interval=60,
+        timeout=60 * 60,
+    )
+
     extract_pg = PythonOperator(
         task_id="extract_employers",
         python_callable=extract_employers,
@@ -265,7 +280,7 @@ with DAG(
         python_callable=load_employers_to_postgres,
     )
 
-    extract_pg >> transform_pg >> load_pg
+    wait_vacancies >> extract_pg >> transform_pg >> load_pg
 
 
 with DAG(
@@ -273,7 +288,7 @@ with DAG(
     default_args=default_args,
     description="Загрузка работодателей hh.ru в ODS (MySQL)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="15 */6 * * *",
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "employers", "mysql"],
@@ -302,7 +317,7 @@ with DAG(
     default_args=default_args,
     description="Загрузка работодателей hh.ru в ODS (MongoDB)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="30 */6 * * *",
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "employers", "mongo"],

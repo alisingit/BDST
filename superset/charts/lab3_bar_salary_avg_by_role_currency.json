@@ -1,0 +1,22 @@
+{
+  "slice_name": "LAB3: Avg salary by role and currency",
+  "viz_type": "dist_bar",
+  "datasource": "dm.hh_salary_by_industry_region_currency_month",
+  "form_data": {
+    "viz_type": "dist_bar",
+    "groupby": ["industry_name"],
+    "metrics": [
+      {
+        "expressionType": "SQL",
+        "label": "salary_avg_avg",
+        "sqlExpression": "AVG(salary_avg)"
+      }
+    ],
+    "columns": ["currency"],
+    "row_limit": 1000,
+    "order_desc": true,
+    "show_bar_value": false
+  }
+}
+
+

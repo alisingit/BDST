@@ -10,6 +10,10 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 DDS_SCHEMA = "dds"
 
 
+def same_execution_date(execution_date):
+    return execution_date
+
+
 def _get_postgres_conn() -> PostgresHook:
     return PostgresHook(postgres_conn_id="postgres_ods")
 
@@ -115,7 +119,7 @@ with DAG(
     default_args=default_args,
     description="DDS-измерения для справочника отраслей/сфер HH (PostgreSQL)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 */12 * * *",
+    schedule_interval="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["hh", "dds", "salary_industries", "postgres"],
@@ -125,6 +129,7 @@ with DAG(
         task_id="wait_for_ods_salary_industries_postgres",
         external_dag_id="hh_salary_industries_to_postgres",
         external_task_id="load_salary_industries_to_postgres",
+        execution_date_fn=same_execution_date,
         mode="reschedule",
         poke_interval=60,
         timeout=60 * 60,

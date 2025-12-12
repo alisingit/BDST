@@ -1,0 +1,18 @@
+{
+  "slice_name": "LAB3: Regions by role (heatmap)",
+  "viz_type": "heatmap",
+  "datasource": "dm.hh_regions_by_industry",
+  "form_data": {
+    "viz_type": "heatmap",
+    "all_columns_x": "industry_name",
+    "all_columns_y": "area_name",
+    "metric": {
+      "expressionType": "SQL",
+      "label": "vacancies_cnt_sum",
+      "sqlExpression": "SUM(vacancies_cnt)"
+    },
+    "row_limit": 5000
+  }
+}
+
+

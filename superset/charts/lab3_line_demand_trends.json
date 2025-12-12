@@ -1,0 +1,21 @@
+{
+  "slice_name": "LAB3: Demand trends by role (monthly)",
+  "viz_type": "line",
+  "datasource": "dm.hh_industry_demand_trends_month",
+  "form_data": {
+    "viz_type": "line",
+    "granularity_sqla": "month",
+    "time_grain_sqla": "P1M",
+    "groupby": ["industry_name"],
+    "metrics": [
+      {
+        "expressionType": "SQL",
+        "label": "vacancies_cnt_sum",
+        "sqlExpression": "SUM(vacancies_cnt)"
+      }
+    ],
+    "row_limit": 10000
+  }
+}
+
+

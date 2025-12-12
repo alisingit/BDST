@@ -10,6 +10,10 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 DDS_SCHEMA = "dds"
 
 
+def same_execution_date(execution_date):
+    return execution_date
+
+
 def _get_postgres_conn() -> PostgresHook:
     return PostgresHook(postgres_conn_id="postgres_ods")
 
@@ -182,15 +186,26 @@ with DAG(
     default_args=default_args,
     description="DDS-слой по работодателям HH (PostgreSQL)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="15 */6 * * *",
+    schedule_interval="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["hh", "dds", "employers", "postgres"],
 ) as dds_employers_dag:
+    wait_dds_vacancies = ExternalTaskSensor(
+        task_id="wait_for_dds_vacancies_postgres",
+        external_dag_id="hh_vacancies_dds_postgres",
+        external_task_id="load_bridge_vacancy_sphere",
+        execution_date_fn=same_execution_date,
+        mode="reschedule",
+        poke_interval=60,
+        timeout=60 * 60,
+    )
+
     wait_ods_employers = ExternalTaskSensor(
         task_id="wait_for_ods_employers_postgres",
         external_dag_id="hh_employers_to_postgres",
         external_task_id="load_employers_to_postgres",
+        execution_date_fn=same_execution_date,
         mode="reschedule",
         poke_interval=60,
         timeout=60 * 60,
@@ -211,6 +226,11 @@ with DAG(
         python_callable=load_fact_employer_snapshot,
     )
 
-    wait_ods_employers >> prepare_schema_employers >> dim_employer_from_ods_task >> fact_employer_snapshot_task
+    (
+        [wait_dds_vacancies, wait_ods_employers]
+        >> prepare_schema_employers
+        >> dim_employer_from_ods_task
+        >> fact_employer_snapshot_task
+    )
 
 

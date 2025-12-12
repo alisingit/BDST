@@ -10,6 +10,10 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 DDS_SCHEMA = "dds"
 
 
+def same_execution_date(execution_date):
+    return execution_date
+
+
 def _get_postgres_conn() -> PostgresHook:
     return PostgresHook(postgres_conn_id="postgres_ods")
 
@@ -64,6 +68,27 @@ def prepare_dds_schema(**_context):
             salary_currency TEXT,
             salary_gross BOOLEAN,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        -- Индустрии для учебной аналитики: professional_roles из HH vacancy details
+        CREATE TABLE IF NOT EXISTS {DDS_SCHEMA}.dim_professional_role (
+            role_id TEXT PRIMARY KEY,
+            role_name TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS {DDS_SCHEMA}.bridge_vacancy_professional_role (
+            vacancy_id BIGINT NOT NULL,
+            role_id TEXT NOT NULL REFERENCES {DDS_SCHEMA}.dim_professional_role (role_id),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (vacancy_id, role_id)
+        );
+
+        -- Мост: вакансия → сфера (specializations.id из детальной карточки вакансии)
+        CREATE TABLE IF NOT EXISTS {DDS_SCHEMA}.bridge_vacancy_sphere (
+            vacancy_id BIGINT NOT NULL,
+            sphere_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (vacancy_id, sphere_id)
         );
         """
     )
@@ -251,6 +276,98 @@ def load_fact_vacancy(**_context):
     logging.info("fact_vacancy loaded/updated")
 
 
+def load_bridge_vacancy_sphere(**_context):
+    """
+    Загружает связь vacancy_id ↔ sphere_id из ODS JSON (raw.specializations).
+
+    В ODS вакансий `raw` хранит детальную карточку HH (/vacancies/{id}),
+    поэтому там должны быть `specializations` (массив объектов с полем id).
+    """
+    hook = _get_postgres_conn()
+    conn = hook.get_conn()
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        INSERT INTO {DDS_SCHEMA}.bridge_vacancy_sphere (vacancy_id, sphere_id)
+        SELECT
+            v.id::bigint AS vacancy_id,
+            (spec->>'id')::text AS sphere_id
+        FROM ods_hh_vacancies_pg v
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(v.raw->'specializations', '[]'::jsonb)
+        ) AS spec
+        WHERE spec ? 'id'
+          AND NULLIF(spec->>'id', '') IS NOT NULL
+        ON CONFLICT (vacancy_id, sphere_id) DO NOTHING;
+        """
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    logging.info("bridge_vacancy_sphere loaded/updated")
+
+
+def load_dim_professional_role(**_context):
+    """
+    Загружает измерение professional roles из ODS JSON (raw.professional_roles).
+    """
+    hook = _get_postgres_conn()
+    conn = hook.get_conn()
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        INSERT INTO {DDS_SCHEMA}.dim_professional_role (role_id, role_name)
+        SELECT DISTINCT
+            (pr->>'id')::text  AS role_id,
+            COALESCE(pr->>'name', 'UNKNOWN') AS role_name
+        FROM ods_hh_vacancies_pg v
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(v.raw->'professional_roles', '[]'::jsonb)
+        ) AS pr
+        WHERE NULLIF(pr->>'id', '') IS NOT NULL
+        ON CONFLICT (role_id) DO UPDATE
+            SET role_name = EXCLUDED.role_name;
+        """
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    logging.info("dim_professional_role loaded/updated")
+
+
+def load_bridge_vacancy_professional_role(**_context):
+    """
+    Загружает связь vacancy_id ↔ role_id из ODS JSON (raw.professional_roles).
+    """
+    hook = _get_postgres_conn()
+    conn = hook.get_conn()
+    cur = conn.cursor()
+
+    cur.execute(
+        f"""
+        INSERT INTO {DDS_SCHEMA}.bridge_vacancy_professional_role (vacancy_id, role_id)
+        SELECT
+            v.id::bigint AS vacancy_id,
+            (pr->>'id')::text AS role_id
+        FROM ods_hh_vacancies_pg v
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(v.raw->'professional_roles', '[]'::jsonb)
+        ) AS pr
+        WHERE NULLIF(pr->>'id', '') IS NOT NULL
+        ON CONFLICT (vacancy_id, role_id) DO NOTHING;
+        """
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    logging.info("bridge_vacancy_professional_role loaded/updated")
+
+
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
@@ -264,7 +381,7 @@ with DAG(
     default_args=default_args,
     description="Формирование DDS по вакансиям HH (PostgreSQL, звёздная схема)",
     start_date=datetime(2025, 1, 1),
-    schedule_interval="30 */6 * * *",
+    schedule_interval="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["hh", "dds", "postgres"],
@@ -274,6 +391,7 @@ with DAG(
         task_id="wait_for_ods_vacancies_postgres",
         external_dag_id="hh_vacancies_to_postgres",
         external_task_id="load_to_postgres",
+        execution_date_fn=same_execution_date,
         mode="reschedule",
         poke_interval=60,
         timeout=60 * 60,
@@ -304,6 +422,28 @@ with DAG(
         python_callable=load_fact_vacancy,
     )
 
-    wait_ods >> prepare_schema >> [dim_date_task, dim_area_task, dim_employer_task] >> fact_vacancy_task
+    bridge_task = PythonOperator(
+        task_id="load_bridge_vacancy_sphere",
+        python_callable=load_bridge_vacancy_sphere,
+    )
+
+    dim_role_task = PythonOperator(
+        task_id="load_dim_professional_role",
+        python_callable=load_dim_professional_role,
+    )
+
+    bridge_role_task = PythonOperator(
+        task_id="load_bridge_vacancy_professional_role",
+        python_callable=load_bridge_vacancy_professional_role,
+    )
+
+    (
+        [wait_ods]
+        >> prepare_schema
+        >> [dim_date_task, dim_area_task, dim_employer_task]
+        >> fact_vacancy_task
+        >> [bridge_task, dim_role_task]
+        >> bridge_role_task
+    )
 
 

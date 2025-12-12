@@ -1,0 +1,23 @@
+{
+  "slice_name": "LAB3: Currency structure by role (stacked)",
+  "viz_type": "dist_bar",
+  "datasource": "dm.hh_currency_structure_by_industry_region",
+  "form_data": {
+    "viz_type": "dist_bar",
+    "groupby": ["industry_name"],
+    "metrics": [
+      {
+        "expressionType": "SQL",
+        "label": "vacancies_cnt_sum",
+        "sqlExpression": "SUM(vacancies_cnt)"
+      }
+    ],
+    "columns": ["currency"],
+    "row_limit": 1000,
+    "order_desc": true,
+    "contribution": "row",
+    "show_bar_value": false
+  }
+}
+
+

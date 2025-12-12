@@ -317,7 +317,7 @@ with DAG(
         "заработных плат HH в ODS (PostgreSQL)"
     ),
     start_date=datetime(2025, 1, 1),
-    schedule_interval="0 */6 * * *",
+    schedule_interval="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "salary", "industries", "postgres"],
@@ -349,7 +349,7 @@ with DAG(
         "заработных плат HH в ODS (MySQL)"
     ),
     start_date=datetime(2025, 1, 1),
-    schedule_interval="15 */6 * * *",
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "salary", "industries", "mysql"],
@@ -381,7 +381,7 @@ with DAG(
         "заработных плат HH в ODS (MongoDB)"
     ),
     start_date=datetime(2025, 1, 1),
-    schedule_interval="30 */6 * * *",
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["hh", "ods", "salary", "industries", "mongo"],

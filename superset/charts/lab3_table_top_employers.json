@@ -1,0 +1,27 @@
+{
+  "slice_name": "LAB3: Top employers by role/region/currency",
+  "viz_type": "table",
+  "datasource": "dm.hh_top_employers_by_industry_region_currency",
+  "form_data": {
+    "viz_type": "table",
+    "all_columns": [
+      "industry_name",
+      "area_name",
+      "currency",
+      "employer_name",
+      "vacancies_cnt",
+      "salary_avg"
+    ],
+    "metrics": [],
+    "orderby": [
+      [
+        "vacancies_cnt",
+        false
+      ]
+    ],
+    "row_limit": 100,
+    "include_time": false
+  }
+}
+
+
